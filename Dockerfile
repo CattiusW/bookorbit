@@ -43,8 +43,9 @@ WORKDIR /app
 ARG APP_VERSION=dev
 ENV APP_VERSION=${APP_VERSION}
 
+# Added rclone to apk add for cloud syncing capabilities
 RUN apk upgrade --no-cache && \
-    apk add --no-cache poppler-utils su-exec ffmpeg && \
+    apk add --no-cache poppler-utils su-exec ffmpeg rclone && \
     rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 ENV NODE_ENV=production
@@ -55,11 +56,18 @@ COPY --from=client-builder --chown=node:node /app/client/dist ./public
 COPY --from=server-builder --chown=node:node /app/server/entrypoint.sh ./entrypoint.sh
 COPY --chown=node:node server/bin/kepubify/ ./bin/kepubify/
 
-RUN chmod +x /app/entrypoint.sh /app/bin/kepubify/* && mkdir -p /books /data/covers /data/book-bucket /tmp && chown -R node:node /data /tmp
+# Copy the custom background sync manager script into the container image
+COPY rclone-sync.sh /app/rclone-sync.sh
+
+# Grant permissions to execute scripts and manage the /tmp directory structure
+RUN chmod +x /app/entrypoint.sh /app/rclone-sync.sh /app/bin/kepubify/* && \
+    mkdir -p /books /data/covers /data/book-bucket /tmp/books && \
+    chown -R node:node /data /tmp
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "const p=process.env.PORT||3000;fetch('http://127.0.0.1:'+p+'/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
+# Default CMD (Render will override this if you specify a custom Start Command)
 CMD ["sh", "/app/entrypoint.sh"]

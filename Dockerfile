@@ -56,7 +56,8 @@ COPY --from=client-builder --chown=node:node /app/client/dist ./public
 COPY --from=server-builder --chown=node:node /app/server/entrypoint.sh ./entrypoint.sh
 COPY --chown=node:node server/bin/kepubify/ ./bin/kepubify/
 
-# Copy the custom background sync manager script into the container image
+# Copy rclone configuration and sync script for cloud storage integration
+COPY rclone.conf /app/rclone.conf
 COPY rclone-sync.sh /app/rclone-sync.sh
 
 # Grant permissions to execute scripts and manage the /tmp directory structure

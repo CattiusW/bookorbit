@@ -7,7 +7,7 @@ sed -i "s|PLACEHOLDER_ENDPOINT|$R2_ENDPOINT_URL|g" /root/.config/rclone/rclone.c
 
 # 2. Pull down existing books from the cloud storage to /tmp/books upon cold boot
 echo "Initial sync: Downloading libraries from Cloudflare R2..."
-rclone sync r2:bookorbit-library /tmp/books --verbose
+rclone sync r2:books /tmp/books --verbose
 
 # 3. Continuous background watcher: scans every 15 seconds to back up newly added books
 echo "Starting continuous background cloud sync loop..."

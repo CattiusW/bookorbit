@@ -96,6 +96,16 @@ ensure_dir "$APP_DATA_PATH"
 ensure_dir "$APP_DATA_PATH/covers"
 ensure_dir "$book_bucket_path"
 
+# Start rclone sync in background if R2 credentials are provided
+if [ -n "$R2_ACCESS_KEY_ID" ] && [ -n "$R2_SECRET_ACCESS_KEY" ] && [ -n "$R2_ENDPOINT_URL" ]; then
+  log "R2 credentials detected, starting background rclone sync..."
+  (cd /app && sh /app/rclone-sync.sh) &
+  RCLONE_PID=$!
+  log "rclone sync started with PID $RCLONE_PID"
+else
+  log "R2 credentials not provided, skipping rclone sync setup"
+fi
+
 if [ "$(id -u)" = "0" ]; then
   fix_owner "$APP_DATA_PATH"
   fix_owner "$book_bucket_path"

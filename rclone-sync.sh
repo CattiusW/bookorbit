@@ -13,6 +13,6 @@ rclone sync r2:books /tmp/books --verbose
 echo "Starting continuous background cloud sync loop..."
 while true; do
   # Sync local writes up to the cloud bucket silently
-  rclone sync /tmp/books r2:bookorbit-library --quiet
+  rclone sync /tmp/books r2:books --quiet
   sleep 15
 done

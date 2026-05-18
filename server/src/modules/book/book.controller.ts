@@ -283,34 +283,52 @@ export class BookController {
     const event = 'book.export_books';
     const startedAt = Date.now();
     this.logger.log(`[${event}] [start] userId=${user.id} count=${bookIds.length} scope=${scope} - export books started`);
+    
     const releaseExportSlot = this.bookService.acquireExportSlot(user.id);
     let plannedFiles = 0;
     let projectedBytes = 0;
     const archive = archiver('zip', { zlib: { level: 0 } });
     let clientDisconnected = false;
+  
     const handleDisconnect = () => {
       clientDisconnected = true;
       archive.abort();
     };
+  
     reply.raw.on('close', handleDisconnect);
     reply.raw.on('aborted', handleDisconnect);
-    const archiveFailure = new Promise<never>((_, reject) => {
-      archive.on('warning', reject);
-      archive.on('error', reject);
-    });
+  
     try {
       const plan = await this.bookService.getExportFiles(bookIds, user, scope);
       plannedFiles = plan.files.length;
       projectedBytes = plan.projectedBytes;
-
-      reply.raw.setHeader('Content-Type', 'application/zip');
-      reply.raw.setHeader('Content-Disposition', 'attachment; filename="books.zip"');
+  
+      // 1. Tell Fastify/NestJS that you are manually piping and taking over the raw response
+      reply.hijack();
+  
+      // 2. Set headers directly onto Node's raw response object
+      reply.raw.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Disposition': 'attachment; filename="books.zip"',
+      });
+  
       archive.pipe(reply.raw);
+  
       for (const file of plan.files) {
         archive.file(file.absolutePath, { name: file.zipPath });
       }
-      await Promise.race([archive.finalize(), archiveFailure]);
-
+  
+      // 3. Ensure the function blocks execution until the client network socket finishes flushing
+      await new Promise<void>((resolve, reject) => {
+        archive.on('warning', (err) => reject(err));
+        archive.on('error', (err) => reject(err));
+        
+        // Resolve once all bytes are flushed down the pipe to Chrome
+        reply.raw.on('finish', resolve);
+  
+        archive.finalize().catch(reject);
+      });
+  
       if (!clientDisconnected) {
         this.logger.log(
           `[${event}] [end] userId=${user.id} count=${bookIds.length} scope=${scope} files=${plannedFiles} projectedBytes=${projectedBytes} durationMs=${Date.now() - startedAt} - export books completed`,
@@ -323,19 +341,28 @@ export class BookController {
         );
         return;
       }
-
+  
       const errorClass = err instanceof Error ? err.name : 'Error';
       const errorMessage = sanitizeLogValue(err instanceof Error ? err.message : String(err));
       this.logger.warn(
         `[${event}] [fail] userId=${user.id} count=${bookIds.length} scope=${scope} files=${plannedFiles} projectedBytes=${projectedBytes} durationMs=${Date.now() - startedAt} errorClass=${errorClass} error="${errorMessage}" - export books failed`,
       );
-      throw err;
+  
+      // 4. Send error via raw object because Fastify was hijacked. DO NOT throw err;
+      if (!reply.raw.headersSent) {
+        reply.raw.writeHead(500, { 'Content-Type': 'application/json' });
+        reply.raw.end(JSON.stringify({ error: 'Internal Server Error', message: 'Export generation failed.' }));
+      } else {
+        // If headers were already sent, terminate the response safely so Chrome sees a broken download, not an infinite stall
+        reply.raw.end();
+      }
     } finally {
       releaseExportSlot();
       reply.raw.off('close', handleDisconnect);
       reply.raw.off('aborted', handleDisconnect);
     }
   }
+
 
   @SkipThrottle()
   @Get(':id/cover')

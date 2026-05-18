@@ -36,8 +36,10 @@ rclone --config="$RCLONE_CONFIG" sync r2:books /tmp/books --verbose
 
 # 3. Continuous background watcher: scans every 15 seconds to back up newly added books
 echo "Starting continuous background cloud sync loop..."
-while true; do
-  # Sync local writes up to the cloud bucket silently
-  rclone --config="$RCLONE_CONFIG" sync /tmp/books r2:books --quiet
-  sleep 15
-done
+(
+  while true; do
+    # Sync local writes up to the cloud bucket silently
+    rclone --config="$RCLONE_CONFIG" sync /tmp/books r2:books --quiet
+    sleep 15
+  done
+) &

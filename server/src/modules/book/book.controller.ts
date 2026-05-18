@@ -278,13 +278,23 @@ export class BookController {
       releaseExportSlot();
     }
   }
-
   private async streamBookExport(bookIds: number[], scope: 'primary' | 'all' | 'audio', user: RequestUser, reply: FastifyReply) {
     const event = 'book.export_books';
     const startedAt = Date.now();
     this.logger.log(`[${event}] [start] userId=${user.id} count=${bookIds.length} scope=${scope} - export books started`);
     
+    // 1. Acquire slot
     const releaseExportSlot = this.bookService.acquireExportSlot(user.id);
+    let slotReleased = false;
+    
+    // Guard function to ensure slot is only freed once
+    const safeReleaseSlot = () => {
+      if (!slotReleased) {
+        releaseExportSlot();
+        slotReleased = true;
+      }
+    };
+  
     let plannedFiles = 0;
     let projectedBytes = 0;
     const archive = archiver('zip', { zlib: { level: 0 } });
@@ -293,6 +303,7 @@ export class BookController {
     const handleDisconnect = () => {
       clientDisconnected = true;
       archive.abort();
+      safeReleaseSlot(); // 👈 Release slot immediately on client disconnect
     };
   
     reply.raw.on('close', handleDisconnect);
@@ -303,10 +314,8 @@ export class BookController {
       plannedFiles = plan.files.length;
       projectedBytes = plan.projectedBytes;
   
-      // 1. Tell Fastify/NestJS that you are manually piping and taking over the raw response
       reply.hijack();
   
-      // 2. Set headers directly onto Node's raw response object
       reply.raw.writeHead(200, {
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename="books.zip"',
@@ -318,13 +327,15 @@ export class BookController {
         archive.file(file.absolutePath, { name: file.zipPath });
       }
   
-      // 3. Ensure the function blocks execution until the client network socket finishes flushing
       await new Promise<void>((resolve, reject) => {
-        archive.on('warning', (err) => reject(err));
-        archive.on('error', (err) => reject(err));
+        archive.on('warning', (err) => { reject(err); });
+        archive.on('error', (err) => { reject(err); });
         
-        // Resolve once all bytes are flushed down the pipe to Chrome
-        reply.raw.on('finish', resolve);
+        // 2. Release slot the moment Chrome finishes downloading the final byte
+        reply.raw.on('finish', () => {
+          safeReleaseSlot(); 
+          resolve();
+        });
   
         archive.finalize().catch(reject);
       });
@@ -335,6 +346,8 @@ export class BookController {
         );
       }
     } catch (err) {
+      safeReleaseSlot(); // 👈 Release slot if file building fails
+  
       if (clientDisconnected) {
         this.logger.log(
           `[${event}] [end] userId=${user.id} count=${bookIds.length} scope=${scope} files=${plannedFiles} projectedBytes=${projectedBytes} durationMs=${Date.now() - startedAt} disconnected=true - export books disconnected`,
@@ -348,20 +361,20 @@ export class BookController {
         `[${event}] [fail] userId=${user.id} count=${bookIds.length} scope=${scope} files=${plannedFiles} projectedBytes=${projectedBytes} durationMs=${Date.now() - startedAt} errorClass=${errorClass} error="${errorMessage}" - export books failed`,
       );
   
-      // 4. Send error via raw object because Fastify was hijacked. DO NOT throw err;
       if (!reply.raw.headersSent) {
         reply.raw.writeHead(500, { 'Content-Type': 'application/json' });
         reply.raw.end(JSON.stringify({ error: 'Internal Server Error', message: 'Export generation failed.' }));
       } else {
-        // If headers were already sent, terminate the response safely so Chrome sees a broken download, not an infinite stall
         reply.raw.end();
       }
     } finally {
-      releaseExportSlot();
+      // 3. Keep cleanup for safety, but safeReleaseSlot guards against double-releasing
+      safeReleaseSlot();
       reply.raw.off('close', handleDisconnect);
       reply.raw.off('aborted', handleDisconnect);
     }
   }
+
 
 
   @SkipThrottle()

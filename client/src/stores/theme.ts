@@ -148,14 +148,14 @@ const DEFAULT_SURFACE_BRIGHTNESS = 35
 export const useThemeStore = defineStore('theme', () => {
   const theme = ref<Theme>(storage.get<Theme>('theme', 'dark'))
 
-  const storedAccent = storage.get<Accent>('accent', 'blue')
-  const accent = ref<Accent>(ACCENT_IDS.includes(storedAccent) ? storedAccent : 'blue')
+  const storedAccent = storage.get<Accent>('accent', 'yellow')
+  const accent = ref<Accent>(ACCENT_IDS.includes(storedAccent) ? storedAccent : 'yellow')
 
   const storedRadius = storage.get<Radius>('radius', 'default')
   const radius = ref<Radius>(RADIUS_IDS.includes(storedRadius) ? storedRadius : 'default')
 
-  const storedBackground = storage.get<Background>('background', 'vinyl')
-  const background = ref<Background>(BACKGROUND_IDS.includes(storedBackground) ? storedBackground : 'dots')
+  const storedBackground = storage.get<Background>('background', 'perforated')
+  const background = ref<Background>(BACKGROUND_IDS.includes(storedBackground) ? storedBackground : 'perforated')
 
   const brightness = ref<number>(storage.get<number>('brightness', DEFAULT_SURFACE_BRIGHTNESS))
 

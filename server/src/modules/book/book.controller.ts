@@ -17,7 +17,6 @@ import {
   Res,
 } from '@nestjs/common';
 import { SkipThrottle } from '@nestjs/throttler';
-import archiver from 'archiver';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import type { FastifyReply } from 'fastify';
@@ -48,6 +47,7 @@ import { SetStatusDto } from '../user-book-status/dto/set-status.dto';
 import { Permission, AuditAction, AuditResource } from '@bookorbit/types';
 import type { BookQuery } from '@bookorbit/types';
 import { UpdateBookMetadataLocksDto } from '../book-metadata-lock/dto/update-book-metadata-locks.dto';
+import * as archiver from 'archiver';
 
 function stripLoneSurrogates(value: string): string {
   let out = '';
@@ -278,7 +278,7 @@ export class BookController {
       releaseExportSlot();
     }
   }
-  private async streamBookExport(
+    private async streamBookExport(
     bookIds: number[],
     scope: 'primary' | 'all' | 'audio',
     user: RequestUser,
@@ -288,7 +288,7 @@ export class BookController {
     const startedAt = Date.now();
     this.logger.log(`[${event}] [start] userId=${user.id} count=${bookIds.length} scope=${scope} - export books started`);
     
-    // 1. Acquire slot
+    // 1. Acquire concurrency slot
     const releaseExportSlot = this.bookService.acquireExportSlot(user.id);
     let slotReleased = false;
     
@@ -301,37 +301,39 @@ export class BookController {
   
     let plannedFiles = 0;
     let projectedBytes = 0;
-    const archive = archiver('zip', { zlib: { level: 0 } });
+    const archive = archiver.default ? (archiver.default as any)('zip', { zlib: { level: 0 } }) : archiver('zip', { zlib: { level: 0 } });
     let clientDisconnected = false;
   
     const handleDisconnect = () => {
       clientDisconnected = true;
       archive.abort();
-      safeReleaseSlot();
+      safeReleaseSlot(); // Release slot immediately on disconnect
     };
   
+    // Bind abort tracking handlers to raw connection socket
     reply.raw.on('close', handleDisconnect);
-    reply.raw.on('aborted', handleDisconnect);
   
     try {
       const plan = await this.bookService.getExportFiles(bookIds, user, scope);
       plannedFiles = plan.files.length;
       projectedBytes = plan.projectedBytes;
   
-      // REMOVED: reply.hijack() - Fastify will now preserve the underlying HTTP protocol stack
+      // Explicitly format standard Fastify headers 
+      reply
+        .header('Content-Type', 'application/zip')
+        .header('Content-Disposition', 'attachment; filename="books.zip"')
+        .header('Cache-Control', 'no-cache')
+        .header('Connection', 'keep-alive');
   
-      reply.raw.writeHead(200, {
-        'Content-Type': 'application/zip',
-        'Content-Disposition': 'attachment; filename="books.zip"',
-        'Connection': 'keep-alive',
-      });
-  
-      archive.pipe(reply.raw);
-  
+      // Bind archival maps systematically 
       for (const file of plan.files) {
         archive.file(file.absolutePath, { name: file.zipPath });
       }
   
+      // Stream the stream object safely via Fastify framework pipeline wrapper
+      reply.send(archive);
+  
+      // Wait for stream settlement inside a wrapped Promise block
       await new Promise<void>((resolve, reject) => {
         archive.on('warning', (err) => { 
           archive.abort();
@@ -359,7 +361,7 @@ export class BookController {
         );
       }
     } catch (err) {
-      safeReleaseSlot();
+      safeReleaseSlot(); // Ensure slot is freed if exception occurs
   
       if (clientDisconnected) {
         this.logger.log(
@@ -375,15 +377,11 @@ export class BookController {
       );
   
       if (!reply.raw.headersSent) {
-        reply.raw.writeHead(500, { 'Content-Type': 'application/json' });
-        reply.raw.end(JSON.stringify({ error: 'Internal Server Error', message: 'Export generation failed.' }));
-      } else {
-        reply.raw.end();
+        reply.status(500).send({ error: 'Internal Server Error', message: 'Export generation failed.' });
       }
     } finally {
       reply.raw.off('close', handleDisconnect);
-      reply.raw.off('aborted', handleDisconnect);
-      safeReleaseSlot();
+      safeReleaseSlot(); // Fallback final resource validation
     }
   }
 

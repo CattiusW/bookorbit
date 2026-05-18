@@ -47,7 +47,7 @@ import { SetStatusDto } from '../user-book-status/dto/set-status.dto';
 import { Permission, AuditAction, AuditResource } from '@bookorbit/types';
 import type { BookQuery } from '@bookorbit/types';
 import { UpdateBookMetadataLocksDto } from '../book-metadata-lock/dto/update-book-metadata-locks.dto';
-import * as archiver from 'archiver';
+
 
 function stripLoneSurrogates(value: string): string {
   let out = '';
@@ -278,7 +278,7 @@ export class BookController {
       releaseExportSlot();
     }
   }
-  private async streamBookExport(
+    private async streamBookExport(
     bookIds: number[],
     scope: 'primary' | 'all' | 'audio',
     user: RequestUser,
@@ -302,10 +302,15 @@ export class BookController {
     let plannedFiles = 0;
     let projectedBytes = 0;
 
-    // FIX: Safely extract the factory function regardless of build compilation tool mappings
-    const archiverFactory = typeof archiver === 'function' 
-      ? archiver 
-      : (archiver as any).default || require('archiver');
+    // FIX: Dynamic runtime execution that completely bypasses build-time transpile wrappers
+    const rawArchiverModule = require('archiver');
+    const archiverFactory = typeof rawArchiverModule === 'function'
+      ? rawArchiverModule
+      : rawArchiverModule.default || rawArchiverModule;
+
+    if (typeof archiverFactory !== 'function') {
+      throw new Error(`Failed to resolve archiver factory. Type found: ${typeof archiverFactory}`);
+    }
       
     const archive = archiverFactory('zip', { zlib: { level: 0 } });
     let clientDisconnected = false;
@@ -385,6 +390,7 @@ export class BookController {
       safeReleaseSlot();
     }
   }
+
 
 
 

@@ -278,7 +278,7 @@ export class BookController {
       releaseExportSlot();
     }
   }
-    private async streamBookExport(
+  private async streamBookExport(
     bookIds: number[],
     scope: 'primary' | 'all' | 'audio',
     user: RequestUser,
@@ -301,16 +301,21 @@ export class BookController {
   
     let plannedFiles = 0;
     let projectedBytes = 0;
-    const archive = archiver.default ? (archiver.default as any)('zip', { zlib: { level: 0 } }) : archiver('zip', { zlib: { level: 0 } });
+
+    // FIX: Safely extract the factory function regardless of build compilation tool mappings
+    const archiverFactory = typeof archiver === 'function' 
+      ? archiver 
+      : (archiver as any).default || require('archiver');
+      
+    const archive = archiverFactory('zip', { zlib: { level: 0 } });
     let clientDisconnected = false;
   
     const handleDisconnect = () => {
       clientDisconnected = true;
       archive.abort();
-      safeReleaseSlot(); // Release slot immediately on disconnect
+      safeReleaseSlot();
     };
   
-    // Bind abort tracking handlers to raw connection socket
     reply.raw.on('close', handleDisconnect);
   
     try {
@@ -318,22 +323,18 @@ export class BookController {
       plannedFiles = plan.files.length;
       projectedBytes = plan.projectedBytes;
   
-      // Explicitly format standard Fastify headers 
       reply
         .header('Content-Type', 'application/zip')
         .header('Content-Disposition', 'attachment; filename="books.zip"')
         .header('Cache-Control', 'no-cache')
         .header('Connection', 'keep-alive');
   
-      // Bind archival maps systematically 
       for (const file of plan.files) {
         archive.file(file.absolutePath, { name: file.zipPath });
       }
   
-      // Stream the stream object safely via Fastify framework pipeline wrapper
       reply.send(archive);
   
-      // Wait for stream settlement inside a wrapped Promise block
       await new Promise<void>((resolve, reject) => {
         archive.on('warning', (err) => { 
           archive.abort();
@@ -361,7 +362,7 @@ export class BookController {
         );
       }
     } catch (err) {
-      safeReleaseSlot(); // Ensure slot is freed if exception occurs
+      safeReleaseSlot();
   
       if (clientDisconnected) {
         this.logger.log(
@@ -381,9 +382,10 @@ export class BookController {
       }
     } finally {
       reply.raw.off('close', handleDisconnect);
-      safeReleaseSlot(); // Fallback final resource validation
+      safeReleaseSlot();
     }
   }
+
 
 
 

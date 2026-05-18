@@ -278,7 +278,12 @@ export class BookController {
       releaseExportSlot();
     }
   }
-  private async streamBookExport(bookIds: number[], scope: 'primary' | 'all' | 'audio', user: RequestUser, reply: FastifyReply) {
+  private async streamBookExport(
+    bookIds: number[],
+    scope: 'primary' | 'all' | 'audio',
+    user: RequestUser,
+    reply: FastifyReply,
+  ): Promise<void> {
     const event = 'book.export_books';
     const startedAt = Date.now();
     this.logger.log(`[${event}] [start] userId=${user.id} count=${bookIds.length} scope=${scope} - export books started`);
@@ -287,7 +292,6 @@ export class BookController {
     const releaseExportSlot = this.bookService.acquireExportSlot(user.id);
     let slotReleased = false;
     
-    // Guard function to ensure slot is only freed once
     const safeReleaseSlot = () => {
       if (!slotReleased) {
         releaseExportSlot();
@@ -303,7 +307,7 @@ export class BookController {
     const handleDisconnect = () => {
       clientDisconnected = true;
       archive.abort();
-      safeReleaseSlot(); // 👈 Release slot immediately on client disconnect
+      safeReleaseSlot();
     };
   
     reply.raw.on('close', handleDisconnect);
@@ -314,11 +318,12 @@ export class BookController {
       plannedFiles = plan.files.length;
       projectedBytes = plan.projectedBytes;
   
-      reply.hijack();
+      // REMOVED: reply.hijack() - Fastify will now preserve the underlying HTTP protocol stack
   
       reply.raw.writeHead(200, {
         'Content-Type': 'application/zip',
         'Content-Disposition': 'attachment; filename="books.zip"',
+        'Connection': 'keep-alive',
       });
   
       archive.pipe(reply.raw);
@@ -328,13 +333,21 @@ export class BookController {
       }
   
       await new Promise<void>((resolve, reject) => {
-        archive.on('warning', (err) => { reject(err); });
-        archive.on('error', (err) => { reject(err); });
+        archive.on('warning', (err) => { 
+          archive.abort();
+          reject(err); 
+        });
+        archive.on('error', (err) => { 
+          reject(err); 
+        });
         
-        // 2. Release slot the moment Chrome finishes downloading the final byte
         reply.raw.on('finish', () => {
           safeReleaseSlot(); 
           resolve();
+        });
+
+        reply.raw.on('error', (err) => {
+          reject(err);
         });
   
         archive.finalize().catch(reject);
@@ -346,7 +359,7 @@ export class BookController {
         );
       }
     } catch (err) {
-      safeReleaseSlot(); // 👈 Release slot if file building fails
+      safeReleaseSlot();
   
       if (clientDisconnected) {
         this.logger.log(
@@ -368,12 +381,12 @@ export class BookController {
         reply.raw.end();
       }
     } finally {
-      // 3. Keep cleanup for safety, but safeReleaseSlot guards against double-releasing
-      safeReleaseSlot();
       reply.raw.off('close', handleDisconnect);
       reply.raw.off('aborted', handleDisconnect);
+      safeReleaseSlot();
     }
   }
+
 
 
 

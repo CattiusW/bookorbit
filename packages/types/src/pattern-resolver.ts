@@ -1,4 +1,6 @@
-export const DEFAULT_UPLOAD_PATTERN = "<{authors:first}|Unknown Author>/<{series}/><{seriesIndex}. >{title}< ({year})>";
+export const DEFAULT_UPLOAD_PATTERN_BOOK_PER_FILE = "<{authors:first}|Unknown Author>/<{series}/><{seriesIndex}. >{title}< ({year})>";
+export const DEFAULT_UPLOAD_PATTERN_BOOK_PER_FOLDER =
+  "<{authors:first}|Unknown Author>/<{series}/><{seriesIndex}. >{title}< ({year})>/<{seriesIndex}. >{title}< ({year})>";
 export const DEFAULT_DOWNLOAD_PATTERN = "{originalFilename}";
 
 export const EXAMPLE_PATTERN_METADATA: Record<string, string> = {
@@ -95,6 +97,28 @@ export function validatePattern(pattern: string): boolean {
   return validPatternRegex.test(pattern);
 }
 
+function normalizeDotExt(ext: string): string {
+  const trimmed = ext.trim();
+  if (!trimmed) return "";
+  const bare = trimmed.startsWith(".") ? trimmed.slice(1) : trimmed;
+  if (!bare) return "";
+  return `.${bare}`;
+}
+
+function ensureTrailingExtension(value: string, dotExt: string): string {
+  if (!dotExt) return value;
+  return value.toLowerCase().endsWith(dotExt.toLowerCase()) ? value : `${value}${dotExt}`;
+}
+
+function ensurePathLastSegmentExtension(path: string, dotExt: string): string {
+  if (!dotExt) return path;
+  const segments = path.split("/");
+  const lastIdx = segments.length - 1;
+  const lastSegment = segments[lastIdx] ?? "";
+  segments[lastIdx] = ensureTrailingExtension(lastSegment, dotExt);
+  return segments.join("/");
+}
+
 /**
  * Resolves a file naming pattern to a relative path (no leading slash).
  * - Pattern ending with '/' → folder path; original filename is used as the file stem.
@@ -106,16 +130,14 @@ export function resolveUploadPath(pattern: string, values: Record<string, string
   const resolved = replacePlaceholders(pattern, values);
   if (!resolved) return null;
 
-  const dotExt = ext.startsWith(".") ? ext : `.${ext}`;
+  const dotExt = normalizeDotExt(ext);
 
   if (resolved.endsWith("/")) {
-    const filename = (values["originalFilename"] ?? "upload") + dotExt;
+    const filename = ensureTrailingExtension(values["originalFilename"] ?? "upload", dotExt);
     return resolved + filename;
   }
 
-  const lastSegment = resolved.split("/").pop() ?? "";
-  const hasExt = /\.[a-z0-9]{2,5}$/i.test(lastSegment);
-  return hasExt ? resolved : resolved + dotExt;
+  return ensurePathLastSegmentExtension(resolved, dotExt);
 }
 
 /**
@@ -130,11 +152,10 @@ export function resolveDownloadFilename(pattern: string, values: Record<string, 
   const resolved = replacePlaceholders(pattern, values);
   if (!resolved) return null;
 
-  const dotExt = ext.startsWith(".") ? ext : `.${ext}`;
+  const dotExt = normalizeDotExt(ext);
   let stem = resolved.endsWith("/") ? (values["originalFilename"] ?? "") : (resolved.split("/").filter(Boolean).pop() ?? "");
   stem = stem.trim();
   if (!stem) return null;
 
-  const hasExt = /\.[a-z0-9]{2,5}$/i.test(stem);
-  return hasExt ? stem : stem + dotExt;
+  return ensureTrailingExtension(stem, dotExt);
 }
